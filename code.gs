@@ -1,190 +1,295 @@
-// Main function to execute the script
-function main() {
+async function getSalesforceData() {
+    // Get the active spreadsheet and create/get sheets
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const detailsSheet = spreadsheet.getSheetByName("License Details") || spreadsheet.insertSheet("License Details");
+    
+    // Clear existing content
+    detailsSheet.clear();
+    
+    let etiData = null;
+    let prodData = null;
+    
     try {
-      console.log('=== Starting script execution ===');
-      
-      // First test the API connection
-      console.log('\nTesting API connection...');
-      const testResult = testApiConnection();
-      if (!testResult.success) {
-        throw new Error('API connection test failed');
+      // Try to fetch ETI data
+      try {
+        etiData = getSalesforceReport('ETI');
+        Logger.log('Successfully fetched ETI data');
+      } catch (etiError) {
+        Logger.log('Error fetching ETI data: ' + etiError.toString());
       }
-      console.log('API connection test successful');
       
-      // Then get the report data
-      console.log('\nFetching report data...');
-      const reportData = getSalesforceReport();
+      // Try to fetch PROD data
+      try {
+        prodData = getSalesforceReport('PROD');
+        Logger.log('Successfully fetched PROD data');
+      } catch (prodError) {
+        Logger.log('Error fetching PROD data: ' + prodError.toString());
+      }
       
-      console.log('=== Script execution completed successfully ===');
-      return reportData;
+      // If both environments failed, throw error
+      if (!etiData && !prodData) {
+        throw new Error('Failed to fetch data from both ETI and PROD environments');
+      }
+      
+      // Process and merge available data
+      const mergedData = mergeEnvironmentData(etiData, prodData);
+      
+      // Process and display the data
+      processAndDisplayData(detailsSheet, mergedData);
+      
     } catch (error) {
-      console.error('=== Script execution failed ===');
-      console.error('Error:', error.toString());
-      throw error;
+      Logger.log('Error processing data: ' + error.toString());
+      Logger.log('Error stack: ' + error.stack);
+      throw new Error('Failed to process data: ' + error.toString());
     }
-} 
+}
 
+function mergeEnvironmentData(etiData, prodData) {
+    // Create maps to track records by their Title
+    const recordsMap = new Map();
+    
+    // Process ETI data if available
+    if (etiData) {
+      processEnvironmentData(etiData, 'ETI', recordsMap);
+    }
+    
+    // Process PROD data if available
+    if (prodData) {
+      processEnvironmentData(prodData, 'PROD', recordsMap);
+    }
+    
+    return Array.from(recordsMap.values());
+}
 
-// Function to get OAuth 2.0 access token using Client Credentials grant
-function getAccessToken() {
-    console.log('Starting OAuth token acquisition...');
+function processEnvironmentData(data, environment, recordsMap) {
+    if (!data.factMap || !data.groupingsDown) return;
     
-    const payload = {
-      grant_type: 'client_credentials'
-    };
-    
-    let options = {
-      method: 'post',
-      muteHttpExceptions: true
-    };
-    
-    // Add client authentication based on configuration
-    if (CONFIG.sendCredentialsInBody === 'true') {
-      console.log('Using body authentication method');
-      payload.client_id = CONFIG.clientId;
-      payload.client_secret = CONFIG.clientSecret;
-      options.payload = payload;
-      console.log('Client credentials added to request body');
-    } else {
-      console.log('Using header authentication method');
-      // Send credentials in Authorization header
-      const credentials = Utilities.base64Encode(CONFIG.clientId + ':' + CONFIG.clientSecret);
-      options.headers = {
-        'Authorization': 'Basic ' + credentials
+    const groupingsMap = {};
+    data.groupingsDown.groupings.forEach(grouping => {
+      groupingsMap[grouping.value] = {
+        title: grouping.label,
+        key: grouping.key
       };
-      options.payload = payload;
-      console.log('Client credentials added to Authorization header');
-    }
+    });
     
-    try {
-      console.log('Sending token request to:', CONFIG.accessTokenUrl);
-      const response = UrlFetchApp.fetch(CONFIG.accessTokenUrl, options);
-      console.log('Token request response received');
+    for (const key in data.factMap) {
+      const entry = data.factMap[key];
+      if (!entry.rows || !entry.rows[0] || !entry.rows[0].dataCells) continue;
       
-      const responseText = response.getContentText();
-      console.log('Token response text');
+      const cells = entry.rows[0].dataCells;
+      const reportId = cells[1].recordId;
+      const groupingData = groupingsMap[reportId] || { title: '', key: '' };
       
-      const result = JSON.parse(responseText);
-      console.log('\n=== TOKEN INFORMATION ===');
-      console.log('Access Token:', result.access_token);
-      console.log('Token Type:', result.token_type);
-      console.log('Instance URL:', result.instance_url);
-      console.log('Scope:', result.scope);
-      console.log('ID:', result.id);
-      console.log('Issued At:', new Date(parseInt(result.issued_at)).toISOString());
-      console.log('=== END TOKEN INFORMATION ===\n');
+      // Use title as the key for merging
+      const title = groupingData.title;
+      if (!title) continue; // Skip if no title found
       
-      if (result.access_token) {
-        console.log('Access token obtained successfully');
-        return result;
+      if (recordsMap.has(title)) {
+        // Record exists, update environment info
+        const record = recordsMap.get(title);
+        if (!record.environments.has(environment)) {
+          record.environments.add(environment);
+          // Sort environments to ensure consistent order (ETI, PROD)
+          record.emplacement = Array.from(record.environments)
+            .sort((a, b) => a.localeCompare(b))
+            .join(', ');
+        }
       } else {
-        console.error('No access token found in response');
-        throw new Error('No access token in response');
+        // New record
+        recordsMap.set(title, {
+          title: title,
+          reportId: reportId,
+          folder: cells[0].label || '',
+          createdBy: cells[1].label || '',
+          createDate: formatDate(cells[3].value) || '',
+          modifyDate: formatDate(cells[2].value) || '',
+          environments: new Set([environment]),
+          emplacement: environment
+        });
       }
-    } catch (error) {
-      console.error('Error getting access token:', error.toString());
-      throw error;
+      
+      // Log for debugging
+      Logger.log(`Processing ${title} - Environment: ${environment} - Current environments: ${recordsMap.get(title).emplacement}`);
     }
 }
 
-// Function to fetch Salesforce report data
-function getSalesforceReport() {
-    try {
-      console.log('Starting Salesforce report retrieval...');
-      const tokenInfo = getAccessToken();
-      console.log('Successfully obtained access token:', tokenInfo.access_token.substring(0, 10) + '...');
+function processAndDisplayData(sheet, mergedRecords) {
+    // Remove existing filters if any
+    const existingFilter = sheet.getFilter();
+    if (existingFilter) {
+      existingFilter.remove();
+    }
+    
+    // Clear existing content
+    sheet.clear();
+    
+    // Define column configuration
+    const columnConfig = {
+      Key: { index: 0, width: 50, align: 'center' },
+      Title: { index: 1, width: 400 },
+      'Report ID': { index: 2, width: 155 },
+      Folder: { index: 3, width: 200 },
+      'Created By': { index: 4, width: 150 },
+      'Create Date': { index: 5, width: 100 },
+      'Modify Date': { index: 6, width: 100 },
+      Environment: { index: 7, width: 100 }
+    };
+    
+    // Sort records by title
+    const sortedRecords = mergedRecords.sort((a, b) => 
+      a.title.toLowerCase().localeCompare(b.title.toLowerCase())
+    );
+    
+    // Calculate environment counts
+    const etiCount = sortedRecords.filter(record => record.environments.has('ETI')).length;
+    const prodCount = sortedRecords.filter(record => record.environments.has('PROD')).length;
+    
+    // Add total rows for environments first
+    const totalRows = [
+      ['', 'Total ETI', '', '', '', '', '', etiCount.toString()],
+      ['', 'Total PROD', '', '', '', '', '', prodCount.toString()]
+    ];
+    
+    // Write total rows at the very top
+    const totalsRange = sheet.getRange(1, 1, 2, 8);
+    totalsRange.setValues(totalRows);
+    
+    // Create headers (now after totals)
+    const headers = Object.keys(columnConfig);
+    const headerRange = sheet.getRange(3, 1, 1, headers.length);
+    headerRange.setValues([headers]);
+    
+    // Create rows with sequential keys and hyperlinks for Environment
+    const rows = sortedRecords.map((record, index) => {
+      // Create hyperlinks for each environment
+      let environmentLinks = record.environments ? Array.from(record.environments).map((env, i, arr) => {
+        const config = SALESFORCE_CONFIG[env];
+        // Replace <reportId> in CLICK_LINK with the actual report ID
+        const clickLink = config.CLICK_LINK.replace('<reportId>', record.reportId);
+        const hyperlink = `HYPERLINK("${clickLink}"; "${env}")`;
+        
+        // If this is not the last environment, add the concatenation operator
+        return i < arr.length - 1 ? 
+          `${hyperlink}&", "&` : 
+          hyperlink;
+      }).join('') : "";
+  
+      // Add the formula prefix only once at the start
+      if (environmentLinks) {
+        environmentLinks = '=' + environmentLinks;
+      }
+  
+      return [
+        (index + 1).toString(),
+        record.title,
+        record.reportId,
+        record.folder,
+        record.createdBy,
+        record.createDate,
+        record.modifyDate,
+        environmentLinks
+      ];
+    });
+    
+    // Write data and format
+    if (rows.length > 0) {
+      // Write main data (starting after header)
+      const dataRange = sheet.getRange(4, 1, rows.length, headers.length);
+      dataRange.setValues(rows);
       
-      // Use instance_url from token response, falling back to config if not available
-      const baseUrl = tokenInfo.instance_url || CONFIG.salesforceBaseUrl;
-      const salesforceUrl = baseUrl + CONFIG.analyticsReportUrl;
-      console.log('Preparing request to:', salesforceUrl);
+      // Set column widths
+      headers.forEach((header, index) => {
+        sheet.setColumnWidth(index + 1, columnConfig[header].width);
+      });
       
-      const options = {
-        method: 'get',
-        headers: {
-          'Authorization': `Bearer ${tokenInfo.access_token}`,
-          'Content-Type': 'application/json'
-        },
-        muteHttpExceptions: true
-      };
+      // Format total rows at the top
+      totalsRange
+        .setBackground('#E8F5E9')  // Light green background
+        .setFontWeight('bold')
+        .setBorder(true, true, true, true, true, true, '#2E7D32', SpreadsheetApp.BorderStyle.SOLID);
       
-      console.log('Request headers:', JSON.stringify(options.headers));
-      console.log('Sending request to Salesforce API...');
+      // Format header
+      headerRange
+        .setBackground('#2E7D32')
+        .setFontColor('white')
+        .setFontWeight('bold')
+        .setHorizontalAlignment('left')
+        .setBorder(true, true, true, true, true, true, 'white', SpreadsheetApp.BorderStyle.SOLID);
       
-      const response = UrlFetchApp.fetch(salesforceUrl, options);
-      const responseCode = response.getResponseCode();
-      console.log('Response status:', responseCode);
+      // Format data rows with specific alignments
+      dataRange
+        .setHorizontalAlignment('left')
+        .setVerticalAlignment('middle')
+        .setWrap(true);
       
-      if (responseCode !== 200) {
-        const errorText = response.getContentText();
-        console.error('Error response:', errorText);
-        throw new Error(`API request failed with status ${responseCode}: ${errorText}`);
+      // Center the Key column
+      sheet.getRange(4, 1, rows.length, 1)
+        .setHorizontalAlignment('center');
+      
+      // Add alternating row colors for data rows
+      for (let i = 4; i <= rows.length + 3; i++) {
+        const rowRange = sheet.getRange(i, 1, 1, headers.length);
+        if ((i - 4) % 2 === 0) {
+          rowRange.setBackground('#FFFFFF');
+        } else {
+          rowRange.setBackground('#F5F5F5');
+        }
+        
+        rowRange.setBorder(
+          true, true, true, true, null, null,
+          '#E0E0E0', SpreadsheetApp.BorderStyle.SOLID
+        );
       }
       
-      const responseText = response.getContentText();
-      console.log('Raw response length:', responseText.length);
-      console.log('Raw response:', responseText);
+      // Special formatting for specific columns
+      const dateColumns = [6, 7];
+      dateColumns.forEach(col => {
+        sheet.getRange(4, col, rows.length, 1)
+          .setHorizontalAlignment('center');
+      });
       
-      const result = JSON.parse(responseText);
-      console.log('Response successfully parsed as JSON');
+      // Format Environment column
+      const environmentColumn = sheet.getRange(4, 8, rows.length, 1);
+      environmentColumn
+        .setHorizontalAlignment('center')
+        .setFontWeight('bold')
+        .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
       
-      // Log the full response body in a formatted way
-      console.log('\nFormatted Response Body:');
-      console.log(JSON.stringify(result, null, 2));
+      // Center the count values in total rows
+      sheet.getRange(1, 8, 2, 1)
+        .setHorizontalAlignment('center');
       
-      // Also log specific sections of interest
-      console.log('\nReport Details:');
-      console.log('Report Name:', result.attributes?.reportName || 'Not found');
-      console.log('Total Records:', result.factMap?.['T!T']?.aggregates?.[0]?.value || 'Not found');
+      // Add filters (for header and data rows only)
+      sheet.getRange(3, 1, rows.length + 1, headers.length).createFilter();
       
-      return result;
-    } catch (error) {
-      console.error('Error fetching Salesforce report:', error.toString());
-      if (error.stack) {
-        console.error('Stack trace:', error.stack);
-      }
-      throw error;
+      Logger.log(`Successfully processed ${rows.length} rows of data`);
+      Logger.log(`ETI Count: ${etiCount}, PROD Count: ${prodCount}`);
     }
 }
 
-// Function to test API connection
-function testApiConnection() {
-    try {
-      console.log('=== Testing API Connection ===');
-      const tokenInfo = getAccessToken();
-      console.log('\nTesting with token:', tokenInfo.access_token.substring(0, 10) + '...');
-      
-      // Use instance_url from token response, falling back to config if not available
-      const baseUrl = tokenInfo.instance_url || CONFIG.salesforceBaseUrl;
-      const testUrl = baseUrl + CONFIG.apiVersionUrl;
-      
-      const options = {
-        method: 'get',
-        headers: {
-          'Authorization': `Bearer ${tokenInfo.access_token}`,
-          'Content-Type': 'application/json'
-        },
-        muteHttpExceptions: true
-      };
-      
-      console.log('Sending test request to:', testUrl);
-      const response = UrlFetchApp.fetch(testUrl, options);
-      const responseCode = response.getResponseCode();
-      const responseText = response.getContentText();
-      
-      console.log('Test response status:', responseCode);
-      console.log('Test response body:', responseText);
-      
-      return {
-        success: responseCode === 200,
-        status: responseCode,
-        response: responseText
-      };
-    } catch (error) {
-      console.error('API test failed:', error.toString());
-      return {
-        success: false,
-        error: error.toString()
-      };
+// Helper function to format dates
+function formatDate(dateString) {
+    if (!dateString) return '';
+    
+    // Check if the date is already in dd/mm/yyyy format
+    if (dateString.includes('/')) {
+      return dateString;
     }
+    
+    // Convert from yyyy-mm-dd to dd/mm/yyyy
+    const date = new Date(dateString);
+    return Utilities.formatDate(date, Session.getScriptTimeZone(), "dd/MM/yyyy");
+}
+
+// Update the onOpen function to include OAuth menu items
+function onOpen() {
+    const ui = SpreadsheetApp.getUi();
+    const menu = ui.createMenu('Salesforce Data');
+    
+    // Add OAuth menu items
+    addOAuthMenuItems(menu);
+    
+    // Add the main refresh function
+    menu.addItem('Refresh License Data', 'getSalesforceData')
+        .addToUi();
 }
