@@ -1,15 +1,31 @@
-// OAuth 2.0 configuration
-var CONFIG = {
-  // OAuth endpoints
-  accessTokenUrl: '<access token url>',
-  
-  // Salesforce API endpoints
-  salesforceBaseUrl: 'https://<your salesforce domain>.lightning.force.com',
-  analyticsReportUrl: '/services/data/v62.0/analytics/reports/<your report ID>',
-  apiVersionUrl: '/services/data/v62.0/',
-  
-  // Authentication
-  clientId: '<client ID>',
-  clientSecret: '<client secret>',
-  sendCredentialsInBody: true
+// OAuth 2.0 configuration for both PROD and ETI
+const SALESFORCE_CONFIG = {
+  ETI: {
+    // OAuth endpoints
+    accessTokenUrl: 'https://<domain>.my.salesforce.com/services/oauth2/token',
+    
+    // Salesforce API endpoints
+    ENDPOINT: 'https://<replace>.lightning.force.com/services/data/v62.0/analytics/reports/<replace>',
+    CLICK_LINK: 'https://<replace>.lightning.force.com/lightning/r/Report/<reportId>/view',
+    apiVersionUrl: '/services/data/v62.0/',
+    
+    // Authentication
+    clientId: '<replace>',
+    clientSecret: '<replace>',
+    sendCredentialsInBody: true
+  },
+  PROD: {
+    // OAuth endpoints
+    accessTokenUrl: 'https://<replace>.my.salesforce.com/services/oauth2/token',
+    
+    // Salesforce API endpoints
+    ENDPOINT: 'https://<domain>.lightning.force.com/services/data/v62.0/analytics/reports/<domain>',
+    CLICK_LINK: 'https://<domain>.lightning.force.com/lightning/r/Report/<prod_reportId>/view',
+    apiVersionUrl: '/services/data/v62.0/',
+    
+    // Authentication
+    clientId: '<prod_clientId>',
+    clientSecret: '<prod_client_secret>',
+    sendCredentialsInBody: true
+  }
 }; 
