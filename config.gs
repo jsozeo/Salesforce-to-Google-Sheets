@@ -2,7 +2,7 @@
 const SALESFORCE_CONFIG = {
   ETI: {
     // OAuth endpoints
-    accessTokenUrl: 'https://<domain>.my.salesforce.com/services/oauth2/token',
+    accessTokenUrl: 'https://<replace>.my.salesforce.com/services/oauth2/token',
     
     // Salesforce API endpoints
     ENDPOINT: 'https://<replace>.lightning.force.com/services/data/v62.0/analytics/reports/<replace>',
@@ -19,13 +19,13 @@ const SALESFORCE_CONFIG = {
     accessTokenUrl: 'https://<replace>.my.salesforce.com/services/oauth2/token',
     
     // Salesforce API endpoints
-    ENDPOINT: 'https://<domain>.lightning.force.com/services/data/v62.0/analytics/reports/<domain>',
-    CLICK_LINK: 'https://<domain>.lightning.force.com/lightning/r/Report/<prod_reportId>/view',
+    ENDPOINT: 'https://<replace>.lightning.force.com/services/data/v62.0/analytics/reports/<replace>',
+    CLICK_LINK: 'https://<replace>.lightning.force.com/lightning/r/Report/<prod_reportId>/view',
     apiVersionUrl: '/services/data/v62.0/',
     
     // Authentication
-    clientId: '<prod_clientId>',
-    clientSecret: '<prod_client_secret>',
+    clientId: '<replace>',
+    clientSecret: '<replace>',
     sendCredentialsInBody: true
   }
 }; 
